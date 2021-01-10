@@ -11,6 +11,14 @@ date: "`r Sys.Date()`"
 output: distill::distill_article
 ---
 
+```{r}
+library(tidyverse)
+library(tigris)
+library(sf)
+library(mapdeck)
+```
+
+
 # Get data
 
 LODES OD files from 2020. Warning. File is about 15 MB!
@@ -21,7 +29,7 @@ download.file("https://lehd.ces.census.gov/data/lodes/LODES7/wi/od/wi_od_main_JT
 
 Saving data as RDS file for faster processing, then deleting the original file.
 ```{r eval=F}
-library(tidyverse)
+
 OD <- read_csv("data/wi_od_main_JT00_2018.csv.gz")
 saveRDS(OD, file = "data/wi_od_main_JT00_2018.rds")
 file.remove("data/wi_od_main_JT00_2018.csv.gz")
@@ -146,7 +154,7 @@ Let's see if this changes if instead of all jobs we only look at primary jobs.
 download.file("https://lehd.ces.census.gov/data/lodes/LODES7/wi/od/wi_od_main_JT00_2018.csv.gz", "data/wi_od_main_JT01_2018.csv.gz")
 ```
 
-```{r}
+```{r eval=F}
 OD_primary <- read_csv("data/wi_od_main_JT01_2018.csv.gz")
 saveRDS(OD_primary, file = "data/wi_od_main_JT01_2018.rds")
 file.remove("data/wi_od_main_JT01_2018.csv.gz")
@@ -169,7 +177,8 @@ destination <- wi_centroid %>%
   inner_join(OD_primary_100, by = c("GEOID10" = "h_geocode"))
 
 OD_primary_100 <- wi_centroid %>% 
-  inner_join(OD_primary_100, by = c("GEOID10" = "w_geocode"))
+  inner_join(OD_primary_100, by = c("GEOID10" = "w_geocode")) %>% 
+  rename(w_geocode = GEOID10)
 
 
 
@@ -177,6 +186,9 @@ OD_primary_100$destination <- destination$geometry
 
 OD_primary_100 <- OD_primary_100 %>% 
   mutate(thick = S000/10)
+
+target_blocks <-  wi %>% 
+  filter(GEOID10 %in% OD_primary_100$w_geocode | GEOID10 %in% OD_primary_100$h_geocode)
 
 ```
 
@@ -193,6 +205,93 @@ mapdeck(style = mapdeck_style("light"), pitch = 45 ) %>%
     , stroke_from = "#404040"
     , stroke_to = "#ca0020"
     , stroke_width = "thick"
+  ) %>% 
+  add_polygon(
+    data = target_blocks,
+    fill_colour = "#50404080",
+    fill_opacity = .2,
+    stroke_colour = "#404040"
+  )
+```
+
+While there still are a surprising number of long-distance commute flows, at least in Madison now more intra-city flows become visible (the only other area with an intr-city flow showing up is in Marshfield for Marshfield clinic employees). Epic and the UW-Madison remain as the two dominant destinations; the UW Health Hospital has one single pair, connected to a block of apartment complexes in Fitchburg.
+
+Let's look at visualize these individually.
+
+```{r}
+# filter to only block with origin and destination within Dane County
+# filtering through spatial operations is computationally expensive
+# instead filtering by the GEOID: 55 is the state, 025 Dane County
+
+dane <- tigris::counties(state = 55)
+dane <- dane %>% 
+  filter(NAME == "Dane")
+
+OD_primary_100_dane <- OD_primary_100 %>% 
+  filter(st_within(.$geometry, dane, sparse = F) & st_within(.$destination, dane, sparse = F))
+
+
+
+mapdeck(style = mapdeck_style("light"), pitch = 45 ) %>%
+  add_arc(
+    data = x
+    , layer_id = "arc_layer"
+    , origin = "geometry"
+    , destination = "destination"
+    , stroke_from = "#404040"
+    , stroke_to = "#ca0020"
+    , stroke_width = "thick"
+  )
+```
+
+Let's filter the _whole_ dataset to only OD pairs within Dane.
+```{r}
+
+destination <- wi_centroid %>% 
+  inner_join(OD_primary, by = c("GEOID10" = "h_geocode"))
+
+OD_primary <- wi_centroid %>% 
+  inner_join(OD_primary, by = c("GEOID10" = "w_geocode")) %>% 
+  rename(w_geocode = GEOID10)
+
+
+
+OD_primary$destination <- destination$geometry
+
+OD_primary <- OD_primary %>% 
+  mutate(thick = S000/10)
+
+
+
+```
+
+```{r}
+OD_primary_dane <- OD_primary %>% 
+  filter(st_within(.$geometry, dane, sparse = F) & st_within(.$destination, dane, sparse = F))
+
+OD_primary_dane_50 <- OD_primary_dane %>% 
+  arrange(desc(S000)) %>% 
+  head(n = 150)
+
+target_blocks_dane <-  wi %>% 
+  filter(GEOID10 %in% OD_primary_dane_50$w_geocode | GEOID10 %in% OD_primary_dane_50$h_geocode)
+
+
+mapdeck(style = mapdeck_style("light"), pitch = 45 ) %>%
+  add_arc(
+    data = OD_primary_dane_50
+    , layer_id = "arc_layer"
+    , origin = "geometry"
+    , destination = "destination"
+    , stroke_from = "#404040"
+    , stroke_to = "#ca0020"
+    #, stroke_width = "S000"
+  )  %>% 
+  add_polygon(
+    data = target_blocks_dane,
+    fill_colour = "#50404080",
+    fill_opacity = .2,
+    stroke_colour = "#404040"
   )
 ```
 
