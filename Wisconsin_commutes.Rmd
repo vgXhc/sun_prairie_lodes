@@ -1,7 +1,7 @@
 ---
-title: "Untitled"
+title: "Visualizing commute flows in Wisconsin"
 description: |
-  A new article created using the Distill format.
+  LODES provides origin-destination data for connecting work and home. This article looks at patters in those flows in Wisconsin, and especially in Madison
 author:
   - name: Nora Jones 
     url: https://example.com/norajones
@@ -10,6 +10,7 @@ author:
 date: "`r Sys.Date()`"
 output: distill::distill_article
 ---
+
 
 ```{r}
 library(tidyverse)
@@ -78,6 +79,8 @@ OD %>%
 
 This does not look terribly promising -- maybe block pairs are the wrong unit of analysis, with a huge number of them only having a single job-home pair. Aggregation to block groups or tracts may make more sense, but for now I'll proceed with the blocks.
 
+# Commute flows in Wisconsin
+
 The number of block pairs is large, and so I'll sample the 100 blocks with the largest number of commutes.
 
 ```{r top-hundred}
@@ -107,16 +110,24 @@ target_blocks_OD_100 <-  wi %>%
   filter(GEOID10 %in% OD_100$w_geocode | GEOID10 %in% OD_100$h_geocode)
 ```
 
+## Visualizing the flows
 
-Now we can visualize the top-100 commute flows:
+Now we can visualize the top-100 commute flows in the state:
 
 ```{r}
 library(mapdeck)
 
+# function for plotting the map
 
+OD_arcs <- function(OD){
+  #create target blocks
+  target_blocks <-  wi %>%
+  filter(GEOID10 %in% OD$w_geocode | GEOID10 %in% OD$h_geocode)
+  #draw map
+  
 mapdeck(style = mapdeck_style("light"), pitch = 45 ) %>%
   add_arc(
-    data = OD_100
+    data = OD
     , layer_id = "arc_layer"
     , origin = "origin"
     , destination = "destination"
@@ -127,12 +138,16 @@ mapdeck(style = mapdeck_style("light"), pitch = 45 ) %>%
   add_polygon(
     data = target_blocks,
     layer_id = "blocks",
-    fill_colour = "#541352FF",
+    fill_colour = "#54135296",
     fill_opacity = .2,
     stroke_colour = "#404040",
     tooltip = "w_geocode"
   )
+}
+
+OD_arcs(OD_100)
 ```
+
 
 Wow, it is immediately obvious how dominant commute flows in the Madison area are! And by zooming in you can identify some other patterns:
 
@@ -143,183 +158,53 @@ Wow, it is immediately obvious how dominant commute flows in the Madison area ar
 - For two OD pairs, home and work are actually in the same block: One is the UW in Platteville (presumably students living and working on campus), and a strangely empty looking wooded block near Hayward. My best guess is that it's a farm or forestry business.
 
 
-```{r}
-download.file("https://lehd.ces.census.gov/data/lodes/LODES7/wi/od/wi_od_main_JT00_2018.csv.gz", "data/wi_od_main_JT01_2018.csv.gz")
-```
+# Madison flows
 
-```{r eval=F}
-OD_primary <- read_csv("data/wi_od_main_JT01_2018.csv.gz")
-saveRDS(OD_primary, file = "data/wi_od_main_JT01_2018.rds")
-file.remove("data/wi_od_main_JT01_2018.csv.gz")
-```
+Given the visual prominence of Madison on the map (and my personal interest in Madison), it makes sense to do a separate analysis just for flows within Dane County.
 
-```{r}
-OD_primary <- readRDS("data/wi_od_main_JT00_2018.rds")
-
-OD_primary <- OD_primary %>% 
-  mutate(across(1:2, as.character)) %>%  #change GEOID columns to character to be safe
-  select(w_geocode, h_geocode, S000) #keep only home/work, total jobs
-```
-Use joins to create an `sf` object with two geometry columns, picking the tracts with the largest commuter flows
-```{r}
-OD_primary_100 <- OD_primary %>% 
-  arrange(desc(S000)) %>% 
-  head(n = 100)
-
-destination <- wi_centroid %>% 
-  inner_join(OD_primary_100, by = c("GEOID10" = "w_geocode"))
-
-OD_primary_100 <- wi_centroid %>% 
-  inner_join(OD_primary_100, by = c("GEOID10" = "h_geocode")) %>% 
-  rename(h_geocode = GEOID10)
-
-OD_primary_100$destination <- destination$geometry
-
-OD_primary_100 <- OD_primary_100 %>% 
-  mutate(thick = S000/10)
-
-target_blocks <-  wi %>% 
-  filter(GEOID10 %in% OD_primary_100$w_geocode | GEOID10 %in% OD_primary_100$h_geocode)
-
-```
-
-```{r}
-library(mapdeck)
-
-
-mapdeck(style = mapdeck_style("light"), pitch = 45 ) %>%
-  add_arc(
-    data = OD_primary_100
-    , layer_id = "arc_layer"
-    , origin = "geometry"
-    , destination = "destination"
-    , stroke_from = "#404040"
-    , stroke_to = "#ca0020"
-    , stroke_width = "thick"
-  ) %>% 
-  add_polygon(
-    data = target_blocks,
-    layer_id = "blocks",
-    fill_colour = "#50404080",
-    fill_opacity = .2,
-    stroke_colour = "#404040",
-    tooltip = "S000"
-  )
-```
-
-While there still are a surprising number of long-distance commute flows, at least in Madison now more intra-city flows become visible (the only other area with an intr-city flow showing up is in Marshfield for Marshfield clinic employees). Epic and the UW-Madison remain as the two dominant destinations; the UW Health Hospital has one single pair, connected to a block of apartment complexes in Fitchburg.
-
-Let's look at visualize these individually.
-
-```{r}
+```{r filter-dane}
 # filter to only block with origin and destination within Dane County
 # filtering through spatial operations is computationally expensive
 # instead filtering by the GEOID: 55 is the state, 025 Dane County
 
-OD_primary_100_dane <- OD_primary_100 %>% 
-  filter(str_detect( w_geocode, "55025") & str_detect(h_geocode, "55025"))
+OD_dane <- OD %>% 
+  filter(str_detect(w_geocode, "55025") & str_detect(h_geocode, "55025"))
 
 
-
-
-
-mapdeck(style = mapdeck_style("light"), pitch = 45 ) %>%
-  add_arc(
-    data = OD_primary_100_dane
-    , layer_id = "arc_layer"
-    , origin = "geometry"
-    , destination = "destination"
-    , stroke_from = "#404040"
-    , stroke_to = "#ca0020"
-    , stroke_width = "thick"
-  )
-```
-
-Let's filter the *whole* dataset to only OD pairs within Dane.
-
-```{r}
-OD_primary_dane <- OD_primary %>% 
-  filter(str_detect(w_geocode, "55025") & str_detect(h_geocode, "55025")) %>% 
-  filter(S000 > 5)
-
-
-OD_primary_dane <- OD_primary_dane %>% 
-  mutate(thick = S000/10)
-
-
-OD_primary_dane <- OD_primary_dane %>% 
+OD_dane <- OD_dane %>% 
   left_join(wi_centroid, by = c("w_geocode" = "GEOID10")) %>% 
   inner_join(wi_centroid, by = c("h_geocode" = "GEOID10")) %>% 
+  mutate(thick = S000/10) %>% 
+  rename(origin = geometry.y,
+         destination = geometry.x)
+
+OD_dane <- OD_dane %>% 
   st_as_sf()
-
-OD_primary_dane2 <- OD_primary_dane  %>% 
-  st_as_sf()
-
-OD_primary_dane2 %>% 
-  mutate(origin = c(origin.lat, origin.lon))
-
-x <- OD_primary_dane %>% 
-  mutate(x = st_coordinates(geometry.x))
 ```
 
-
-Still not quite right: There destination blocks with no target polygon, eg. on the east side. Might be a vintage thing
 ```{r}
-OD_primary_dane_50 <- OD_primary_dane2 %>% 
-  filter(S000>1) %>% 
+OD_dane_100 <- OD_dane %>% 
+  filter(S000>1) %>% #speeds things up
   arrange(desc(S000)) %>% 
-  head(n = 50)
+  head(n = 100)
 
-target_blocks_dane <-  wi %>%
-  filter(GEOID10 %in% OD_primary_dane_50$w_geocode | GEOID10 %in% OD_primary_dane_50$h_geocode)
-
-
-mapdeck(style = mapdeck_style("light"), pitch = 45 ) %>%
-  add_arc(
-    data = OD_primary_dane_50
-    , layer_id = "arc_layer"
-    , origin = "geometry.x"
-    , destination = "geometry.y"
-    , stroke_from = "#404040"
-    , stroke_to = "#ca0020"
-    , stroke_width = "thick"
-  ) %>% 
-  add_polygon(data = target_blocks_dane,
-              tooltip = "GEOID10",
-              fill_opacity = .5,
-              stroke_colour = "#404040")
-
-
+OD_arcs(OD_dane_100)
 ```
+
+Well, this doesn't look all that different, does it? More arcs, but all of them still point at the UW, Epic, and the university hospital. This doesn't change even if you look at the top-150 OD pairs. Only when you bump it up to 300, a few more work locations appear.
 
 ```{r}
-library(tmap)
-tm_shape(OD_primary_dane_50) +
-  tm_lines()
+OD_dane_300 <- OD_dane %>% 
+  arrange(desc(S000)) %>% 
+  head(300)
+
+unique(OD_dane_300$w_geocode)
 ```
 
-## Get LODES employment data
+Plotting 300 arcs of course is a bit of a mess:
 
-# file downloaded from <https://lehd.ces.census.gov/data/>
+```{r}
+OD_arcs(OD_dane_300)
+```
+If you scroll around enough you see the City-County Building, American Family Insurance, and a block with several employers near the Am Fam campus.
 
-# WI -\> state
-
-# WAC -\> workplace geography
-
-# S000 -\> segment of the workforce: all jobs
-
-# JT00 -\> job type: all jobs
-
-# documentation here: <https://lehd.ces.census.gov/data/lodes/LODES7/LODESTechDoc7.4.pdf>
-
-jobs \<- read_csv("data/lodes/wi_wac_S000_JT00_2017.csv")
-
-jobs \<- jobs %\>% mutate(GEOID = as.character(w_geocode))
-
-\#get TIGER shapefiles for blocks blocks \<- blocks("WI", county = "Dane", year = 2017)
-
-# join jobs and block groups
-
-jobs_blocks \<- blocks %\>% left_join(jobs, by = c("GEOID10" = "GEOID"))
-
-tmap_mode("view") tm_shape(jobs_blocks) + tm_polygons("C000")
