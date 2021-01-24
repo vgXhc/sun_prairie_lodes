@@ -191,7 +191,7 @@ OD_dane_100 <- OD_dane %>%
 OD_arcs(OD_dane_100)
 ```
 
-Well, this doesn't look all that different, does it? More arcs, but all of them still point at the UW, Epic, and the university hospital. This doesn't change even if you look at the top-150 OD pairs. Only when you bump it up to 300, a few more work locations appear.
+Well, this doesn't look all that different, does it? More arcs, but all of them still point at the UW, Epic, and the university hospital. This doesn't change even if you look at the top-150 OD pairs. Only once you bump it up to 300, a few more work locations appear.
 
 ```{r}
 OD_dane_300 <- OD_dane %>% 
@@ -207,4 +207,32 @@ Plotting 300 arcs of course is a bit of a mess:
 OD_arcs(OD_dane_300)
 ```
 If you scroll around enough you see the City-County Building, American Family Insurance, and a block with several employers near the Am Fam campus.
+
+Some observations:
+
+- There are about 20 contiguous blocks in the Bassett and Mifflin neighborhood that have a lot of people commuting to Epic. That area is well served by the 75 bus providing peak-hour service to and from Epic in 35 to 40 minutes
+- There are surprisingly few commute blocks on the east side. For Epic employees that makes sense, as traveling through the isthmus takes a good amount of time, but I would have expected more prominent UW flows
+
+## Aggregating to block groups
+
+I mentioned at the beginning of the article that census blocks tend to be fairly small. What happens when we aggregate them into block groups?
+
+```{r}
+# aggregating to block groups only requires truncating the GEOID to 12 digits
+OD_dane_bg <- OD %>% 
+  filter(str_detect(w_geocode, "55025") & str_detect(h_geocode, "55025")) %>% 
+  mutate(h_blockgroup = str_trunc(h_geocode, 12, ellipsis = "")) %>% 
+  group_by(h_blockgroup, w_geocode) %>% 
+  mutate(S000_bg = sum(S000)) %>% 
+  select(-c(h_geocode, S000)) %>% 
+  distinct()
+```
+
+```{r}
+dane_bg <- block_groups(55, 025, year = 2010)
+```
+
+```{r}
+
+```
 
