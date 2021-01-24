@@ -18,7 +18,6 @@ library(sf)
 library(mapdeck)
 ```
 
-
 # Get data
 
 LODES OD files from 2020. Warning. File is about 15 MB!
@@ -28,6 +27,7 @@ download.file("https://lehd.ces.census.gov/data/lodes/LODES7/wi/od/wi_od_main_JT
 ```
 
 Saving data as RDS file for faster processing, then deleting the original file.
+
 ```{r eval=F}
 
 OD <- read_csv("data/wi_od_main_JT00_2018.csv.gz")
@@ -45,52 +45,23 @@ OD <- OD %>%
   select(w_geocode, h_geocode, S000) #keep only home/work, total jobs
 ```
 
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE)
 ```
 
 
-```{r}
-url <- 'https://raw.githubusercontent.com/plotly/datasets/master/2011_february_aa_flight_paths.csv'
-flights <- read.csv(url)
-flights$id <- seq_len(nrow(flights))
-flights$stroke <- sample(1:3, size = nrow(flights), replace = T)
-flights$start_elev <- sample(100000:1000000, size = nrow(flights), replace = TRUE )
+The [`mapdeck` arc visualization](https://symbolixau.github.io/mapdeck/articles/layers.html) requires either two pairs of coordinates or `sfc` columns.
 
-sf_flights <- sfheaders::sf_point(flights, x = "start_lon", y = "start_lat", z = "start_elev", keep = TRUE)
+I will get TIGER geographies with the `tigris` package, calculate centroids with `sf`, and then merge with the LODES data. Note that LODES uses the 2010 vintage for its geographies, whereas `tigris` defaults to the most recent vintage.
 
-destination <- sfheaders::sfc_point(flights, x = "end_lon", y = "end_lat", z = "start_elev")
-
-sf_flights$destination <- destination
-
-library(mapdeck)
-mapdeck(
-) %>%
- add_arc(
-   data = sf_flights
-   , origin = 'geometry'
-   , destination = 'destination'
-   , layer_id = 'arcs'
-   , stroke_from = "airport1"
-   , stroke_to = "airport2"
-)
-```
-
-
-The [`mapdeck` arc visualization](https://symbolixau.github.io/mapdeck/articles/layers.html) requires either two pairs of coordinates or `sfc` columns. 
-
-I will get TIGER geographies with the `tigris` package, calculate centroids with `sf`, and then merge with the LODES data.
-
-```{r}
+```{r fetch-WI-blocks}
 library(tigris)
 options(tigris_use_cache = TRUE)
 
-wi <- blocks("WI")
+wi <- blocks("WI", year = 2010)
 ```
 
-
-```{r}
+```{r calculate-centroids}
 library(sf)
 wi_centroid <- wi %>% 
   select(GEOID10, geometry) %>% 
@@ -104,30 +75,40 @@ OD %>%
   ggplot(aes(S000)) +
   geom_density()
 ```
-This does not look terribly promising -- maybe block pairs are the wrong unit of analysis, with a huge number of them only having a single job. Aggregation to block groups or tracts may make more sense, but for now I'll proceed with the blocks.
 
-```{r}
+This does not look terribly promising -- maybe block pairs are the wrong unit of analysis, with a huge number of them only having a single job-home pair. Aggregation to block groups or tracts may make more sense, but for now I'll proceed with the blocks.
+
+The number of block pairs is large, and so I'll sample the 100 blocks with the largest number of commutes.
+
+```{r top-hundred}
 OD_100 <- OD %>% 
   arrange(desc(S000)) %>% 
   head(n = 100)
 ```
 
-```{r}
+Now we can do a double join with the block centroids: First, join on the work geocode, then do another join on the home geocode. This will create a new dataframe with two geometry columns. In order to work with the `mapdeck` package, the dataframe needs to be turned into an `sf` object. Finally, we add a thickness helper variable based on the number of jobs in the OD pair. This variable will specify the width of the arcs in the visualization. 
+
+```{r join-od100}
 OD_100 <- OD_100 %>% 
-  left_join(wi_centroid, by = c("w_geocode" = "GEOID10"))
+  left_join(wi_centroid, by = c("w_geocode" = "GEOID10")) %>% 
+  inner_join(wi_centroid, by = c("h_geocode" = "GEOID10")) %>% 
+  mutate(thick = S000/10) %>% 
+  rename(origin = geometry.y,
+         destination = geometry.x)
 
-OD_101 <- wi_centroid %>% 
-  inner_join(OD_100, by = c("GEOID10" = "w_geocode"))
-
-destination <- wi_centroid %>% 
-  inner_join(OD_100, by = c("GEOID10" = "h_geocode"))
-
-OD_101$destination <- destination$geometry
-
-OD_101 <- OD_101 %>% 
-  mutate(thick = S000/10)
+OD_100 <- OD_100 %>% 
+  st_as_sf()
 ```
 
+Census blocks can be oddly shaped, and so it's a good idea to plot the actual blocks and not just their centroids.
+
+```{r}
+target_blocks_OD_100 <-  wi %>%
+  filter(GEOID10 %in% OD_100$w_geocode | GEOID10 %in% OD_100$h_geocode)
+```
+
+
+Now we can visualize the top-100 commute flows:
 
 ```{r}
 library(mapdeck)
@@ -135,20 +116,32 @@ library(mapdeck)
 
 mapdeck(style = mapdeck_style("light"), pitch = 45 ) %>%
   add_arc(
-    data = OD_101
+    data = OD_100
     , layer_id = "arc_layer"
-    , origin = "geometry"
+    , origin = "origin"
     , destination = "destination"
     , stroke_from = "#404040"
     , stroke_to = "#ca0020"
     , stroke_width = "thick"
+  ) %>% 
+  add_polygon(
+    data = target_blocks,
+    layer_id = "blocks",
+    fill_colour = "#541352FF",
+    fill_opacity = .2,
+    stroke_colour = "#404040",
+    tooltip = "w_geocode"
   )
 ```
 
+Wow, it is immediately obvious how dominant commute flows in the Madison area are! And by zooming in you can identify some other patterns:
 
-This is quite surprising to me. I would have expected that the dominant commute pattern would be within cities or metro areas. Instead what we're seeing are a lot of long-distance commute pairs. A lot of them center on Madison (mostly as a destination, but also as an origin), but there also odd pairs of commutes between Platteville and Barron (home of a large turkey processing plant) and others.
+- In Madison two employers capture almost all commute flows: The UW-Madison downtown^[For some reason, the university reports all(?) of its employees as working at a single location. In reality, UW employment is more spread out.] and electronic health record company Epic in suburban Verona. The only other employer making an appearance is the university hospital (which is a separate entity from the university)
+- In Milwaukee, by far the state's largest city, there are only three OD pairs in total: Two point at the [32-story Northwestern Mutual Tower](https://en.wikipedia.org/wiki/Northwestern_Mutual_Tower_and_Commons) downtown; the third leads to the large suburban medical campus that includes the Medical College of Wisconsin, Froedtert Hospital, and the Childrens' Hospital of Wisconsin.
+- Sheboygan is probably best known for plumbing product company Kohler, and the Kohler Co. headquarters make a prominent appearance on the map, with 8 arcs pointing at it.
+- For the remainder of OD pairs around the state, it's primarily meat processing, healthcare facilities, and tribal facilities that appear as destinations.
+- For two OD pairs, home and work are actually in the same block: One is the UW in Platteville (presumably students living and working on campus), and a strangely empty looking wooded block near Hayward. My best guess is that it's a farm or forestry business.
 
-Let's see if this changes if instead of all jobs we only look at primary jobs.
 
 ```{r}
 download.file("https://lehd.ces.census.gov/data/lodes/LODES7/wi/od/wi_od_main_JT00_2018.csv.gz", "data/wi_od_main_JT01_2018.csv.gz")
@@ -159,28 +152,26 @@ OD_primary <- read_csv("data/wi_od_main_JT01_2018.csv.gz")
 saveRDS(OD_primary, file = "data/wi_od_main_JT01_2018.rds")
 file.remove("data/wi_od_main_JT01_2018.csv.gz")
 ```
+
 ```{r}
 OD_primary <- readRDS("data/wi_od_main_JT00_2018.rds")
 
-OD_primary <- OD %>% 
+OD_primary <- OD_primary %>% 
   mutate(across(1:2, as.character)) %>%  #change GEOID columns to character to be safe
   select(w_geocode, h_geocode, S000) #keep only home/work, total jobs
 ```
-
-
+Use joins to create an `sf` object with two geometry columns, picking the tracts with the largest commuter flows
 ```{r}
 OD_primary_100 <- OD_primary %>% 
   arrange(desc(S000)) %>% 
   head(n = 100)
 
 destination <- wi_centroid %>% 
-  inner_join(OD_primary_100, by = c("GEOID10" = "h_geocode"))
+  inner_join(OD_primary_100, by = c("GEOID10" = "w_geocode"))
 
 OD_primary_100 <- wi_centroid %>% 
-  inner_join(OD_primary_100, by = c("GEOID10" = "w_geocode")) %>% 
-  rename(w_geocode = GEOID10)
-
-
+  inner_join(OD_primary_100, by = c("GEOID10" = "h_geocode")) %>% 
+  rename(h_geocode = GEOID10)
 
 OD_primary_100$destination <- destination$geometry
 
@@ -208,9 +199,11 @@ mapdeck(style = mapdeck_style("light"), pitch = 45 ) %>%
   ) %>% 
   add_polygon(
     data = target_blocks,
+    layer_id = "blocks",
     fill_colour = "#50404080",
     fill_opacity = .2,
-    stroke_colour = "#404040"
+    stroke_colour = "#404040",
+    tooltip = "S000"
   )
 ```
 
@@ -223,18 +216,16 @@ Let's look at visualize these individually.
 # filtering through spatial operations is computationally expensive
 # instead filtering by the GEOID: 55 is the state, 025 Dane County
 
-dane <- tigris::counties(state = 55)
-dane <- dane %>% 
-  filter(NAME == "Dane")
-
 OD_primary_100_dane <- OD_primary_100 %>% 
-  filter(st_within(.$geometry, dane, sparse = F) & st_within(.$destination, dane, sparse = F))
+  filter(str_detect( w_geocode, "55025") & str_detect(h_geocode, "55025"))
+
+
 
 
 
 mapdeck(style = mapdeck_style("light"), pitch = 45 ) %>%
   add_arc(
-    data = x
+    data = OD_primary_100_dane
     , layer_id = "arc_layer"
     , origin = "geometry"
     , destination = "destination"
@@ -244,36 +235,42 @@ mapdeck(style = mapdeck_style("light"), pitch = 45 ) %>%
   )
 ```
 
-Let's filter the _whole_ dataset to only OD pairs within Dane.
-```{r}
-
-destination <- wi_centroid %>% 
-  inner_join(OD_primary, by = c("GEOID10" = "h_geocode"))
-
-OD_primary <- wi_centroid %>% 
-  inner_join(OD_primary, by = c("GEOID10" = "w_geocode")) %>% 
-  rename(w_geocode = GEOID10)
-
-
-
-OD_primary$destination <- destination$geometry
-
-OD_primary <- OD_primary %>% 
-  mutate(thick = S000/10)
-
-
-
-```
+Let's filter the *whole* dataset to only OD pairs within Dane.
 
 ```{r}
 OD_primary_dane <- OD_primary %>% 
-  filter(st_within(.$geometry, dane, sparse = F) & st_within(.$destination, dane, sparse = F))
+  filter(str_detect(w_geocode, "55025") & str_detect(h_geocode, "55025")) %>% 
+  filter(S000 > 5)
 
-OD_primary_dane_50 <- OD_primary_dane %>% 
+
+OD_primary_dane <- OD_primary_dane %>% 
+  mutate(thick = S000/10)
+
+
+OD_primary_dane <- OD_primary_dane %>% 
+  left_join(wi_centroid, by = c("w_geocode" = "GEOID10")) %>% 
+  inner_join(wi_centroid, by = c("h_geocode" = "GEOID10")) %>% 
+  st_as_sf()
+
+OD_primary_dane2 <- OD_primary_dane  %>% 
+  st_as_sf()
+
+OD_primary_dane2 %>% 
+  mutate(origin = c(origin.lat, origin.lon))
+
+x <- OD_primary_dane %>% 
+  mutate(x = st_coordinates(geometry.x))
+```
+
+
+Still not quite right: There destination blocks with no target polygon, eg. on the east side. Might be a vintage thing
+```{r}
+OD_primary_dane_50 <- OD_primary_dane2 %>% 
+  filter(S000>1) %>% 
   arrange(desc(S000)) %>% 
-  head(n = 150)
+  head(n = 50)
 
-target_blocks_dane <-  wi %>% 
+target_blocks_dane <-  wi %>%
   filter(GEOID10 %in% OD_primary_dane_50$w_geocode | GEOID10 %in% OD_primary_dane_50$h_geocode)
 
 
@@ -281,43 +278,48 @@ mapdeck(style = mapdeck_style("light"), pitch = 45 ) %>%
   add_arc(
     data = OD_primary_dane_50
     , layer_id = "arc_layer"
-    , origin = "geometry"
-    , destination = "destination"
+    , origin = "geometry.x"
+    , destination = "geometry.y"
     , stroke_from = "#404040"
     , stroke_to = "#ca0020"
-    #, stroke_width = "S000"
-  )  %>% 
-  add_polygon(
-    data = target_blocks_dane,
-    fill_colour = "#50404080",
-    fill_opacity = .2,
-    stroke_colour = "#404040"
-  )
+    , stroke_width = "thick"
+  ) %>% 
+  add_polygon(data = target_blocks_dane,
+              tooltip = "GEOID10",
+              fill_opacity = .5,
+              stroke_colour = "#404040")
+
+
+```
+
+```{r}
+library(tmap)
+tm_shape(OD_primary_dane_50) +
+  tm_lines()
 ```
 
 ## Get LODES employment data
-# file downloaded from https://lehd.ces.census.gov/data/
-# WI -> state
-# WAC -> workplace geography
-# S000 -> segment of the workforce: all jobs
-# JT00 -> job type: all jobs
-# documentation here: https://lehd.ces.census.gov/data/lodes/LODES7/LODESTechDoc7.4.pdf
-jobs <- read_csv("data/lodes/wi_wac_S000_JT00_2017.csv")
 
-jobs <- jobs %>% 
-  mutate(GEOID = as.character(w_geocode))
+# file downloaded from <https://lehd.ces.census.gov/data/>
 
-#get TIGER shapefiles for blocks
-blocks <- blocks("WI", county = "Dane", year = 2017)
-  
+# WI -\> state
+
+# WAC -\> workplace geography
+
+# S000 -\> segment of the workforce: all jobs
+
+# JT00 -\> job type: all jobs
+
+# documentation here: <https://lehd.ces.census.gov/data/lodes/LODES7/LODESTechDoc7.4.pdf>
+
+jobs \<- read_csv("data/lodes/wi_wac_S000_JT00_2017.csv")
+
+jobs \<- jobs %\>% mutate(GEOID = as.character(w_geocode))
+
+\#get TIGER shapefiles for blocks blocks \<- blocks("WI", county = "Dane", year = 2017)
 
 # join jobs and block groups
-jobs_blocks <- blocks %>% 
-  left_join(jobs, by = c("GEOID10" = "GEOID"))
 
-tmap_mode("view")
-tm_shape(jobs_blocks) +
-  tm_polygons("C000")
+jobs_blocks \<- blocks %\>% left_join(jobs, by = c("GEOID10" = "GEOID"))
 
-
-
+tmap_mode("view") tm_shape(jobs_blocks) + tm_polygons("C000")
