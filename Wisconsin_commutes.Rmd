@@ -3,12 +3,17 @@ title: "Visualizing commute flows in Wisconsin"
 description: |
   LODES provides origin-destination data for connecting work and home. This article looks at patters in those flows in Wisconsin, and especially in Madison
 author:
-  - name: Nora Jones 
-    url: https://example.com/norajones
-    affiliation: Spacely Sprockets
-    affiliation_url: https://example.com/spacelysprokets
-date: "`r Sys.Date()`"
-output: distill::distill_article
+  - name: Harald Kliems 
+    orcid_id: 0000-0003-2542-0047
+    url: https://haraldkliems.netlify.app/
+repository_url: https://github.com/vgXhc/lodes_od
+compare_updates_url:
+creative_commons: CC BY-SA
+preview: images/preview.png
+output: 
+  distill::distill_article:
+    self_contained: false
+    code_folding: true
 ---
 
 
@@ -19,16 +24,16 @@ library(sf)
 library(mapdeck)
 ```
 
-In  previous posts I have worked with data from the US Census Bureau's  American Community Survey (ACS). ACS  is great for data on people and households. For employment data, however, there is a better (or maybe complementary) source: The [LEHD Origin-Destination Employment Statistics (LODES)](https://lehd.ces.census.gov/). The data can be accessed via a somewhat clunky web interface, [On the Map](https://onthemap.ces.census.gov/) or downloaded and then analyzed in your software of choice. One  unique feature of LODES is the "OD" part in its name: LODES provides the number of people who commute from one census block to another. This could be helpful in transportation or general urban planning. For example, are there major employment centers that have a large share of its workers living in the same part of town, and could they therefore easily be served by transit?
+In  previous posts I have worked with data from the US Census Bureau's  American Community Survey (ACS). ACS  is great for data on people and households. For employment data, however, there is a better (or maybe complementary) source: The [LEHD Origin-Destination Employment Statistics (LODES)](https://lehd.ces.census.gov/). The data can be accessed via a somewhat clunky web interface, [On the Map](https://onthemap.ces.census.gov/) or downloaded and then analyzed in your software of choice. One  unique feature of LODES is the "OD" part in its name: It provides the number of people who commute from one census block to another. This can be helpful in transportation or general urban planning. For example, are there major employment centers that have a large share of its workers living in the same part of town, and could they therefore easily be served by transit?
 
-In this post I will look at LODES data for Madison and the state of Wisconsin as a whole.
+In this post I will look at LODES data for Madison and the state of Wisconsin as a whole. The latest LODES data available is from 2018.
 
 ```{r eval=F}
-Saving data as RDS file for faster processing, then deleting the original file.
+#Saving data as RDS file for faster processing, then deleting the original file.
 download.file("https://lehd.ces.census.gov/data/lodes/LODES7/wi/od/wi_od_main_JT00_2018.csv.gz", "data/wi_od_main_JT00_2018.csv.gz")
 ```
 
-
+# Data preparation
 
 ```{r eval=F}
 
@@ -47,9 +52,7 @@ OD <- OD %>%
   select(w_geocode, h_geocode, S000) #keep only home/work, total jobs
 ```
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE)
-```
+
 
 
 The [`mapdeck` arc visualization](https://symbolixau.github.io/mapdeck/articles/layers.html) requires either two pairs of coordinates or `sfc` columns.
@@ -78,7 +81,7 @@ OD %>%
   geom_density()
 ```
 
-This does not look terribly promising -- maybe block pairs are the wrong unit of analysis, with a huge number of them only having a single job-home pair. Aggregation to block groups or tracts may make more sense, but for now I'll proceed with the blocks.
+This does not look terribly promising--maybe block pairs are the wrong unit of analysis, with a huge number of them only having a single job-home pair. Aggregation to block groups or tracts may make more sense, but for now I'll proceed with the blocks.
 
 # Commute flows in Wisconsin
 
@@ -111,7 +114,7 @@ target_blocks_OD_100 <-  wi %>%
   filter(GEOID10 %in% OD_100$w_geocode | GEOID10 %in% OD_100$h_geocode)
 ```
 
-## Visualizing the flows
+# Visualizing the flows
 
 Now we can visualize the top-100 commute flows in the state:
 
@@ -156,7 +159,7 @@ Wow, it is immediately obvious how dominant commute flows in the Madison area ar
 - In Milwaukee, by far the state's largest city, there are only three OD pairs in total: Two point at the [32-story Northwestern Mutual Tower](https://en.wikipedia.org/wiki/Northwestern_Mutual_Tower_and_Commons) downtown; the third leads to the large suburban medical campus that includes the Medical College of Wisconsin, Froedtert Hospital, and the Childrens' Hospital of Wisconsin.
 - Sheboygan is probably best known for plumbing product company Kohler, and the Kohler Co. headquarters make a prominent appearance on the map, with 8 arcs pointing at it.
 - For the remainder of OD pairs around the state, it's primarily meat processing, healthcare facilities, and tribal facilities that appear as destinations.
-- For two OD pairs, home and work are actually in the same block: One is the UW in Platteville (presumably students living and working on campus), and a strangely empty looking wooded block near Hayward. My best guess is that it's a farm or forestry business.
+- For two OD pairs, home and work are actually in the same block: One is the UW in Platteville (presumably students living and working on campus), and a strangely empty looking wooded block near Hayward. My best guess is that it's a farm or forestry business. 
 
 
 # Madison flows
@@ -209,10 +212,14 @@ OD_arcs(OD_dane_300)
 ```
 If you scroll around enough you see the City-County Building, American Family Insurance, and a block with several employers near the Am Fam campus.
 
+![American Family Insurance and some other employment at the nothern edge of town](images\am_fam_static.png)
+
 Some observations:
 
 - There are about 20 contiguous blocks in the Bassett and Mifflin neighborhood that have a lot of people commuting to Epic. That area is well served by the 75 bus providing peak-hour service to and from Epic in 35 to 40 minutes
 - There are surprisingly few commute blocks on the east side. For Epic employees that makes sense, as traveling through the isthmus takes a good amount of time, but I would have expected more prominent UW flows
+
+![The "Epic blocks" downtown](images/epic_blocks.png)
 
 ## Aggregating to block groups
 
@@ -291,7 +298,8 @@ mapdeck(style = mapdeck_style("light"), pitch = 45 ) %>%
   )
 ```
 
-with the cut-off set to the 100 most frequent OD pairs, a few additional employment centers make an appearance, along the Beltline in Middleton. Other than that, there is not much insight to be gained. And especially along the edges of town, the block groups are quite large. If, for example, your goal is transit planning, using blocks is probably the better choice. 
+With the cut-off set to the 100 most frequent OD pairs, a few additional employment centers make an appearance, along the Beltline in Middleton. Other than that, there is not much insight to be gained. And especially along the edges of town, the block groups are quite large. If, for example, your goal is transit planning, using blocks is probably the better choice. 
 
 # Conclusion
+
 This is my first time extensively working with LODES origin-destination data and I have learned a lot in terms of data prep and visualization. In terms of actual insights, I am a bit disappointed. Everything being so centered on the UW and Epic leaves little opportunity to learn about other employment centers. But maybe the realization just how dominant these employers are in terms of commute flows is a valuable insight in itself. How, for example, could all those Epic employees on the west side of Madison and in Middleton be better served by transit? And why do Epic employees seemingly cluster more in where they live? The trope of "Epic luxury apartments" downtown is well known---and appears to have some truth to it.
