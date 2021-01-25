@@ -19,15 +19,16 @@ library(sf)
 library(mapdeck)
 ```
 
-# Get data
+In  previous posts I have worked with data from the US Census Bureau's  American Community Survey (ACS). ACS  is great for data on people and households. For employment data, however, there is a better (or maybe complementary) source: The [LEHD Origin-Destination Employment Statistics (LODES)](https://lehd.ces.census.gov/). The data can be accessed via a somewhat clunky web interface, [On the Map](https://onthemap.ces.census.gov/) or downloaded and then analyzed in your software of choice. One  unique feature of LODES is the "OD" part in its name: LODES provides the number of people who commute from one census block to another. This could be helpful in transportation or general urban planning. For example, are there major employment centers that have a large share of its workers living in the same part of town, and could they therefore easily be served by transit?
 
-LODES OD files from 2020. Warning. File is about 15 MB!
+In this post I will look at LODES data for Madison and the state of Wisconsin as a whole.
 
 ```{r eval=F}
+Saving data as RDS file for faster processing, then deleting the original file.
 download.file("https://lehd.ces.census.gov/data/lodes/LODES7/wi/od/wi_od_main_JT00_2018.csv.gz", "data/wi_od_main_JT00_2018.csv.gz")
 ```
 
-Saving data as RDS file for faster processing, then deleting the original file.
+
 
 ```{r eval=F}
 
@@ -230,9 +231,67 @@ OD_dane_bg <- OD %>%
 
 ```{r}
 dane_bg <- block_groups(55, 025, year = 2010)
+
+dane_bg_centroid <- dane_bg %>% 
+  select(GEOID10, geometry) %>% 
+  st_centroid()
 ```
 
 ```{r}
+OD_dane_bg <- OD_dane_bg %>% 
+  left_join(wi_centroid, by = c("w_geocode" = "GEOID10")) %>% 
+  inner_join(dane_bg_centroid, by = c("h_blockgroup" = "GEOID10")) %>% 
+  mutate(thick = S000_bg/20) %>% 
+  rename(origin = geometry.y,
+         destination = geometry.x)
 
+OD_dane_bg <- OD_dane_bg %>% 
+  st_as_sf()
+
+OD_dane_bg_50 <- OD_dane_bg %>% 
+  arrange(desc(S000_bg)) %>% 
+  head(100)
 ```
 
+```{r}
+#create target blocks
+destination_blocks <-  wi %>%
+  filter(GEOID10 %in% OD_dane_bg_50$w_geocode)
+
+origin_bg <- dane_bg %>% 
+  filter(GEOID10 %in% OD_dane_bg_50$h_blockgroup)
+  #draw map
+  
+mapdeck(style = mapdeck_style("light"), pitch = 45 ) %>%
+  add_arc(
+    data = OD_dane_bg_50
+    , layer_id = "arc_layer"
+    , origin = "origin"
+    , destination = "destination"
+    , stroke_from = "#404040"
+    , stroke_to = "#ca0020"
+    , stroke_width = "thick"
+  ) %>% 
+  add_polygon(
+    data = destination_blocks,
+    layer_id = "blocks",
+    fill_colour = "#54135296",
+    fill_opacity = .2,
+    stroke_colour = "f4f5fcFF",
+    tooltip = "w_geocode"
+  ) %>% 
+  add_polygon(
+    data = origin_bg,
+    layer_id = "origin-blockgroups",
+    fill_colour = "#54135296",
+    fill_opacity = .2,
+    stroke_colour = "f4f5fc",
+    stroke_width = 50,
+    tooltip = "w_geocode"
+  )
+```
+
+with the cut-off set to the 100 most frequent OD pairs, a few additional employment centers make an appearance, along the Beltline in Middleton. Other than that, there is not much insight to be gained. And especially along the edges of town, the block groups are quite large. If, for example, your goal is transit planning, using blocks is probably the better choice. 
+
+# Conclusion
+This is my first time extensively working with LODES origin-destination data and I have learned a lot in terms of data prep and visualization. In terms of actual insights, I am a bit disappointed. Everything being so centered on the UW and Epic leaves little opportunity to learn about other employment centers. But maybe the realization just how dominant these employers are in terms of commute flows is a valuable insight in itself. How, for example, could all those Epic employees on the west side of Madison and in Middleton be better served by transit? And why do Epic employees seemingly cluster more in where they live? The trope of "Epic luxury apartments" downtown is well known---and appears to have some truth to it.
