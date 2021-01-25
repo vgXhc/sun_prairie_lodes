@@ -1,7 +1,7 @@
 ---
 title: "Visualizing commute flows in Wisconsin"
 description: |
-  LODES provides origin-destination data for connecting work and home. This article looks at patters in those flows in Wisconsin, and especially in Madison
+  LODES provides origin-destination data for connecting work and home. This article looks at patterns in those flows in Wisconsin, and especially in Madison
 author:
   - name: Harald Kliems 
     orcid_id: 0000-0003-2542-0047
