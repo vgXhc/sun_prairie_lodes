@@ -1,0 +1,336 @@
+---
+title: "Sun Prairie commute flows"
+description: |
+  LODES provides origin-destination data for connecting work and home. This article looks at patterns in those flows in Wisconsin, and especially in Madison
+author:
+  - name: Harald Kliems 
+    orcid_id: 0000-0003-2542-0047
+    url: https://haraldkliems.netlify.app/
+repository_url: https://github.com/vgXhc/sun_prairie_lodes
+compare_updates_url:
+creative_commons: CC BY-SA
+preview: images/preview.png
+output: 
+  distill::distill_article:
+    self_contained: false
+    code_folding: true
+bibliography: references.bib
+---
+
+```{r}
+library(tidyverse)
+library(tigris)
+library(sf)
+library(mapdeck)
+```
+
+This is a follow-up post to my exploration of Wisconsin and Dane County commute flows. An online acquaintance who lives in Sun Prairie asked me whether I could produce map specifically for his hometown.
+
+# Data preparation
+
+The first steps of data preparation are the same. For details, see the previous post.
+
+```{r}
+OD <- readRDS("data/wi_od_main_JT00_2018.rds")
+
+OD <- OD %>% 
+  mutate(across(1:2, as.character)) %>%  #change GEOID columns to character to be safe
+  select(w_geocode, h_geocode, S000) #keep only home/work, total jobs
+```
+
+Matching block-level Census data to city boundaries requires an extra step. The question, "Which blocks comprise the City of Sun Prairie?" can be answered with the `geocorr` tool\[@missouricensusdatacenter2018\].
+
+```{r}
+sun_prairie_blocks <- read_csv("data/geocorr2018_2136303454.csv")[-1,]
+
+sun_prairie_blocks <- sun_prairie_blocks %>% 
+  mutate(GEOID = paste0(county, tract, block)) %>% 
+  mutate(GEOID = str_remove(GEOID, "\\.")) # tracts sometimes have period
+```
+
+We now filter the OD data to all observations whose work or home geography are in the City of Sun Prairie.
+
+```{r}
+OD_SP <- OD %>% 
+  filter(w_geocode %in% sun_prairie_blocks$GEOID | h_geocode %in% sun_prairie_blocks$GEOID)
+```
+
+This leaves over 20,000 OD pairs. We'll select the 100 with the largest commute flows.
+
+```{r}
+OD_SP_100 <- OD_SP %>% 
+  arrange(desc(S000)) %>% 
+  head(n=100)
+```
+
+The [`mapdeck` arc visualization](https://symbolixau.github.io/mapdeck/articles/layers.html) requires either two pairs of coordinates or `sfc` columns.
+
+I will get TIGER geographies with the `tigris` package, calculate centroids with `sf`, and then merge with the LODES data. Note that LODES uses the 2010 vintage for its geographies, whereas `tigris` defaults to the most recent vintage.
+
+```{r fetch-WI-blocks}
+library(tigris)
+options(tigris_use_cache = TRUE)
+
+wi <- blocks("WI", year = 2010)
+```
+
+```{r calculate-centroids}
+library(sf)
+wi_centroid <- wi %>% 
+  select(GEOID10, geometry) %>% 
+  st_centroid()
+```
+
+# Commute flows in Sun Prairie
+
+I'll sample the 100 blocks with the largest number of commutes.
+
+```{r top-hundred}
+OD_100 <- OD %>% 
+  arrange(desc(S000)) %>% 
+  head(n = 100)
+```
+
+Now we can do a double join with the block centroids: First, join on the work geocode, then do another join on the home geocode. This will create a new dataframe with two geometry columns. In order to work with the `mapdeck` package, the dataframe needs to be turned into an `sf` object. Finally, we add a thickness helper variable based on the number of jobs in the OD pair. This variable will specify the width of the arcs in the visualization.
+
+```{r join-od100}
+OD_SP_100 <- OD_SP_100 %>% 
+  left_join(wi_centroid, by = c("w_geocode" = "GEOID10")) %>% 
+  inner_join(wi_centroid, by = c("h_geocode" = "GEOID10")) %>% 
+  mutate(thick = S000/3) %>% 
+  rename(origin = geometry.y,
+         destination = geometry.x)
+
+OD_SP_100 <- OD_SP_100 %>% 
+  st_as_sf()
+```
+
+Census blocks can be oddly shaped, and so it's a good idea to plot the actual blocks and not just their centroids.
+
+```{r}
+target_blocks_OD_100 <-  wi %>%
+  filter(GEOID10 %in% OD_100$w_geocode | GEOID10 %in% OD_100$h_geocode)
+```
+
+# Visualizing the flows
+
+Now we can visualize the top-100 commute flows in the state:
+
+```{r}
+library(mapdeck)
+
+# function for plotting the map
+
+OD_arcs <- function(OD){
+  #create target blocks
+  target_blocks <-  wi %>%
+  filter(GEOID10 %in% OD$w_geocode | GEOID10 %in% OD$h_geocode)
+  #draw map
+  
+mapdeck(style = mapdeck_style("light"), pitch = 45 ) %>%
+  add_arc(
+    data = OD
+    , layer_id = "arc_layer"
+    , origin = "origin"
+    , destination = "destination"
+    , stroke_from = "#404040"
+    , stroke_to = "#ca0020"
+    , stroke_width = "thick"
+  ) %>% 
+  add_polygon(
+    data = target_blocks,
+    layer_id = "blocks",
+    fill_colour = "#54135296",
+    fill_opacity = .2,
+    stroke_colour = "#404040",
+    tooltip = "w_geocode"
+  ) %>% 
+  add_polygon(
+    data = sun_prairie,
+    layer_id = "city_limits",
+    fill_opacity = 0,
+    stroke_width = 100
+  )
+}
+
+OD_arcs(OD_SP_100)
+```
+
+Wow, it is immediately obvious how dominant commute flows in the Madison area are! And by zooming in you can identify some other patterns:
+
+-   In Madison two employers capture almost all commute flows: The UW-Madison downtown[^1] and electronic health record company Epic in suburban Verona. The only other employer making an appearance is the university hospital (which is a separate entity from the university)
+-   In Milwaukee, by far the state's largest city, there are only three OD pairs in total: Two point at the [32-story Northwestern Mutual Tower](https://en.wikipedia.org/wiki/Northwestern_Mutual_Tower_and_Commons) downtown; the third leads to the large suburban medical campus that includes the Medical College of Wisconsin, Froedtert Hospital, and the Childrens' Hospital of Wisconsin.
+-   Sheboygan is probably best known for plumbing product company Kohler, and the Kohler Co. headquarters make a prominent appearance on the map, with 8 arcs pointing at it.
+-   For the remainder of OD pairs around the state, it's primarily meat processing, healthcare facilities, and tribal facilities that appear as destinations.
+-   For two OD pairs, home and work are actually in the same block: One is the UW in Platteville (presumably students living and working on campus), and a strangely empty looking wooded block near Hayward. My best guess is that it's a farm or forestry business.
+
+[^1]: For some reason, the university reports all(?) of its employees as working at a single location. In reality, UW employment is more spread out.
+
+# Madison flows
+
+Given the visual prominence of Madison on the map (and my personal interest in Madison), it makes sense to do a separate analysis just for flows within Dane County.
+
+```{r filter-dane}
+# filter to only block with origin and destination within Dane County
+# filtering through spatial operations is computationally expensive
+# instead filtering by the GEOID: 55 is the state, 025 Dane County
+
+OD_dane <- OD %>% 
+  filter(str_detect(w_geocode, "55025") & str_detect(h_geocode, "55025"))
+
+
+OD_dane <- OD_dane %>% 
+  left_join(wi_centroid, by = c("w_geocode" = "GEOID10")) %>% 
+  inner_join(wi_centroid, by = c("h_geocode" = "GEOID10")) %>% 
+  mutate(thick = S000/10) %>% 
+  rename(origin = geometry.y,
+         destination = geometry.x)
+
+OD_dane <- OD_dane %>% 
+  st_as_sf()
+```
+
+```{r}
+OD_dane_100 <- OD_dane %>% 
+  filter(S000>1) %>% #speeds things up
+  arrange(desc(S000)) %>% 
+  head(n = 100)
+
+OD_arcs(OD_dane_100)
+```
+
+Well, this doesn't look all that different, does it? More arcs, but all of them still point at the UW, Epic, and the university hospital. This doesn't change even if you look at the top-150 OD pairs. Only once you bump it up to 300, a few more work locations appear.
+
+```{r}
+OD_dane_300 <- OD_dane %>% 
+  arrange(desc(S000)) %>% 
+  head(300)
+
+unique(OD_dane_300$w_geocode)
+```
+
+Plotting 300 arcs of course is a bit of a mess:
+
+```{r}
+OD_arcs(OD_dane_300)
+```
+
+If you scroll around enough you see the City-County Building, American Family Insurance, and a block with several employers near the Am Fam campus.
+
+![American Family Insurance and some other employment at the nothern edge of town](images%5Cam_fam_static.png)
+
+Some observations:
+
+-   There are about 20 contiguous blocks in the Bassett and Mifflin neighborhood that have a lot of people commuting to Epic. That area is well served by the 75 bus providing peak-hour service to and from Epic in 35 to 40 minutes
+-   There are surprisingly few commute blocks on the east side. For Epic employees that makes sense, as traveling through the isthmus takes a good amount of time, but I would have expected more prominent UW flows
+
+![The "Epic blocks" downtown](images/epic_blocks.png)
+
+## Aggregating to block groups
+
+I mentioned at the beginning of the article that census blocks tend to be fairly small. What happens when we aggregate them into block groups?
+
+```{r}
+# aggregating to block groups only requires truncating the GEOID to 12 digits
+OD_dane_bg <- OD %>% 
+  filter(str_detect(w_geocode, "55025") & str_detect(h_geocode, "55025")) %>% 
+  mutate(h_blockgroup = str_trunc(h_geocode, 12, ellipsis = "")) %>% 
+  group_by(h_blockgroup, w_geocode) %>% 
+  mutate(S000_bg = sum(S000)) %>% 
+  select(-c(h_geocode, S000)) %>% 
+  distinct()
+```
+
+```{r}
+dane_bg <- block_groups(55, 025, year = 2010)
+
+dane_bg_centroid <- dane_bg %>% 
+  select(GEOID10, geometry) %>% 
+  st_centroid()
+```
+
+```{r}
+OD_dane_bg <- OD_dane_bg %>% 
+  left_join(wi_centroid, by = c("w_geocode" = "GEOID10")) %>% 
+  inner_join(dane_bg_centroid, by = c("h_blockgroup" = "GEOID10")) %>% 
+  mutate(thick = S000_bg/20) %>% 
+  rename(origin = geometry.y,
+         destination = geometry.x)
+
+OD_dane_bg <- OD_dane_bg %>% 
+  st_as_sf()
+
+OD_dane_bg_50 <- OD_dane_bg %>% 
+  arrange(desc(S000_bg)) %>% 
+  head(100)
+```
+
+```{r}
+#create target blocks
+destination_blocks <-  wi %>%
+  filter(GEOID10 %in% OD_dane_bg_50$w_geocode)
+
+origin_bg <- dane_bg %>% 
+  filter(GEOID10 %in% OD_dane_bg_50$h_blockgroup)
+  #draw map
+  
+mapdeck(style = mapdeck_style("light"), pitch = 45 ) %>%
+  add_arc(
+    data = OD_dane_bg_50
+    , layer_id = "arc_layer"
+    , origin = "origin"
+    , destination = "destination"
+    , stroke_from = "#404040"
+    , stroke_to = "#ca0020"
+    , stroke_width = "thick"
+  ) %>% 
+  add_polygon(
+    data = destination_blocks,
+    layer_id = "blocks",
+    fill_colour = "#54135296",
+    fill_opacity = .2,
+    stroke_colour = "f4f5fcFF",
+    tooltip = "w_geocode"
+  ) %>% 
+  add_polygon(
+    data = origin_bg,
+    layer_id = "origin-blockgroups",
+    fill_colour = "#54135296",
+    fill_opacity = .2,
+    stroke_colour = "f4f5fc",
+    stroke_width = 50,
+    tooltip = "w_geocode"
+  )
+```
+
+With the cut-off set to the 100 most frequent OD pairs, a few additional employment centers make an appearance, along the Beltline in Middleton. Other than that, there is not much insight to be gained. And especially along the edges of town, the block groups are quite large. If, for example, your goal is transit planning, using blocks is probably the better choice.
+
+# Conclusion
+
+This is my first time extensively working with LODES origin-destination data and I have learned a lot in terms of data prep and visualization. In terms of actual insights, I am a bit disappointed. Everything being so centered on the UW and Epic leaves little opportunity to learn about other employment centers. But maybe the realization just how dominant these employers are in terms of commute flows is a valuable insight in itself. How, for example, could all those Epic employees on the west side of Madison and in Middleton be better served by transit? And why do Epic employees seemingly cluster more in where they live? The trope of "Epic luxury apartments" downtown is well known---and appears to have some truth to it.
+
+To filter our data to only blocks within Sun Prairie, we download Sun Prairie's geography with the `places` function from `tigris`:
+
+```{r}
+places <- places(state = 55)
+
+sun_prairie <- places %>% 
+  filter(NAME == "Sun Prairie")
+
+library(tmap)
+tm_shape(sun_prairie) +
+  tm_polygons()
+
+
+```
+
+Madison is located fairly centrally in Dane County and it seems safe to assume to cross-county-border commute flows are rare. Sun Prairie is farther northeast, and just to be safe we will include the three nearest counties in our analysis: Jefferson, Columbia, and Dodge.
+
+```{r filter-dane-plus}
+# filter to only block with origin and destination within Dane County and surrounding NE counties
+# filtering through spatial operations is computationally expensive
+# instead filtering by the GEOID: 55 is the state, 025 Dane County, 021 Columbia, 055 Jefferson, 027 Dodge
+
+OD_dane_plus <- OD %>% 
+  filter(str_detect(w_geocode, "55025|55021|55055|55027") & str_detect(h_geocode, "55025|55021|55055|55027"))
+```
